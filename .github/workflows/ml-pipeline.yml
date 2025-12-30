@@ -1,0 +1,194 @@
+name: ML CEP - Training Pipeline & Report Generation
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allows manual trigger from GitHub Actions tab
+  # pull_request removed for security - prevents contributors from triggering pipeline
+
+jobs:
+  train-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 🔒 Security Check
+      run: |
+        echo "Checking authorization..."
+        ACTOR="${{ github.actor }}"
+        OWNER="${{ github.repository_owner }}"
+        
+        if [ "$ACTOR" != "$OWNER" ]; then
+          echo "❌ UNAUTHORIZED: Only the repository owner can run this pipeline."
+          echo "   Actor: $ACTOR"
+          echo "   Owner: $OWNER"
+          echo ""
+          echo "🚫 This workflow is restricted to prevent unnecessary resource usage."
+          echo "   Contact the repository owner if you need access."
+          exit 1
+        fi
+        
+        echo "✅ Authorization successful!"
+        echo "   Running as: $ACTOR"
+    
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v3
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        echo "✅ Dependencies installed successfully"
+    
+    - name: 📊 Download UCI Dataset (Optional)
+      continue-on-error: true
+      run: |
+        echo "Attempting to download UCI dataset..."
+        python -c "
+        import urllib.request
+        import zipfile
+        import os
+        try:
+            print('Downloading from UCI Repository...')
+            urllib.request.urlretrieve(
+                'https://archive.ics.uci.edu/static/public/374/appliances+energy+prediction.zip',
+                'dataset.zip'
+            )
+            print('Extracting...')
+            with zipfile.ZipFile('dataset.zip', 'r') as zip_ref:
+                zip_ref.extractall('.')
+            
+            # Find and move CSV
+            for root, dirs, files in os.walk('.'):
+                for file in files:
+                    if file == 'energydata_complete.csv':
+                        source = os.path.join(root, file)
+                        if source != './energydata_complete.csv':
+                            os.rename(source, 'energydata_complete.csv')
+                            print(f'✅ Dataset ready: {os.path.abspath(\"energydata_complete.csv\")}')
+                            break
+            
+            if os.path.exists('dataset.zip'):
+                os.remove('dataset.zip')
+        except Exception as e:
+            print(f'⚠️ Download failed: {e}')
+            print('Will use synthetic data instead')
+        "
+    
+    - name: 🚂 Run Training Pipeline
+      run: |
+        echo "=========================================="
+        echo "Starting Training Pipeline"
+        echo "=========================================="
+        python train.py
+        echo "✅ Training completed"
+    
+    - name: 📈 Run Evaluation
+      run: |
+        echo "=========================================="
+        echo "Running Evaluation"
+        echo "=========================================="
+        python evaluate.py
+        echo "✅ Evaluation completed"
+    
+    - name: 🌐 Generate Web Report
+      run: |
+        echo "=========================================="
+        echo "Generating Web Report"
+        echo "=========================================="
+        python generate_web_report.py
+        echo "✅ Web report generated"
+    
+    - name: 📋 Create Build Summary
+      run: |
+        echo "## 🎉 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ✅ Training Pipeline Completed Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Generated Files:**" >> $GITHUB_STEP_SUMMARY
+        echo "- 📁 models/ - Trained models and visualizations" >> $GITHUB_STEP_SUMMARY
+        echo "- 📁 results/ - Evaluation metrics and plots" >> $GITHUB_STEP_SUMMARY
+        echo "- 📁 docs/ - Web report (GitHub Pages ready)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Results Preview" >> $GITHUB_STEP_SUMMARY
+        if [ -f "results/evaluation_summary.txt" ]; then
+          cat results/evaluation_summary.txt >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🌐 View Report Online" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Your ML CEP Report will be available at:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**🔗 https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_Note: It may take 1-2 minutes for GitHub Pages to update after deployment._" >> $GITHUB_STEP_SUMMARY
+    
+    - name: 📤 Upload Training Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: trained-models
+        path: |
+          models/
+          results/
+        retention-days: 30
+    
+    - name: 📤 Upload Web Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-report
+        path: docs/
+        retention-days: 90
+    
+    - name: 🧹 Prepare Docs for Deployment
+      run: |
+        echo "Ensuring only index.html is the entry point..."
+        # Remove any README files that might interfere with GitHub Pages
+        find docs -name "README.md" -type f -delete 2>/dev/null || true
+        find docs -name "readme.md" -type f -delete 2>/dev/null || true
+        # Verify index.html exists
+        if [ -f "docs/index.html" ]; then
+          echo "✅ index.html found in docs/"
+        else
+          echo "❌ Warning: index.html not found in docs/"
+        fi
+        ls -la docs/
+    
+    - name: 📤 Push to gh-pages Branch
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs
+        publish_branch: gh-pages
+        enable_jekyll: false
+        user_name: 'github-actions[bot]'
+        user_email: 'github-actions[bot]@users.noreply.github.com'
+        commit_message: '🚀 Update ML CEP Report - ${{ github.sha }}'
+        # This pushes ONLY HTML content to gh-pages
+        # The pages-deploy.yml workflow will then deploy to GitHub Pages
+    
+    - name: 🎉 Success Notification
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      run: |
+        echo "=========================================="
+        echo "✅ Pipeline Completed Successfully!"
+        echo "=========================================="
+        echo ""
+        echo "🌐 Web Report deployed to GitHub Pages:"
+        echo "🔗 https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+        echo ""
+        echo "📝 Note: GitHub Pages may take 1-2 minutes to update."
+        echo ""
+        echo "📦 Artifacts uploaded:"
+        echo "  - Trained models (30 days retention)"
+        echo "  - Evaluation results (30 days retention)"
+        echo "  - Web report (90 days retention)"
+        echo ""
+        echo "💡 Tip: Check the 'Summary' tab above for the clickable link!"
