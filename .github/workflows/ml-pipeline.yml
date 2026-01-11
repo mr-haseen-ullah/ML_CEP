@@ -171,6 +171,7 @@ jobs:
         user_name: 'github-actions[bot]'
         user_email: 'github-actions[bot]@users.noreply.github.com'
         commit_message: '🚀 Update ML CEP Report - ${{ github.sha }}'
+        cname: mlcep.haseenullah.live
         # This pushes ONLY HTML content to gh-pages
         # The pages-deploy.yml workflow will then deploy to GitHub Pages
     
